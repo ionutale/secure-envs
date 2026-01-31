@@ -11,75 +11,86 @@ if (!global.crypto) {
 
 export type EnvVarMap = { [key: string]: string };
 
-export class KdbxEnvLoader {
-    private filePath: string;
+export async function loadKdbxVariables(filePath: string, password: string, variableNames: string[], keyFile?: string): Promise<EnvVarMap> {
+    try {
+        const db = await loadDatabase(filePath, password, keyFile);
+        return extractVariables(db, variableNames);
+    } catch (error) {
+        handleError(error);
+        throw error;
+    }
+}
 
-    constructor(filePath: string) {
-        this.filePath = filePath;
+async function loadDatabase(filePath: string, password: string, keyFile?: string): Promise<kdbxweb.Kdbx> {
+    const fileBuffer = readFileAsBuffer(filePath);
+    const credentials = createCredentials(password, keyFile);
+    return await kdbxweb.Kdbx.load(fileBuffer, credentials);
+}
+
+function readFileAsBuffer(filePath: string): ArrayBuffer {
+    const data = fs.readFileSync(filePath);
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+}
+
+function createCredentials(password: string, keyFile?: string): kdbxweb.Credentials {
+    let keyFileArrayBuffer: ArrayBuffer | undefined;
+    
+    if (keyFile) {
+        keyFileArrayBuffer = readFileAsBuffer(keyFile);
     }
 
-    async loadVariables(password: string, variableNames: string[], keyFile?: string): Promise<EnvVarMap> {
-        try {
-            const data = fs.readFileSync(this.filePath);
-            const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    return new kdbxweb.Credentials(
+        kdbxweb.ProtectedValue.fromString(password), 
+        keyFileArrayBuffer
+    );
+}
 
-             let keyFileArrayBuffer: ArrayBuffer | undefined = undefined;
-            if (keyFile) {
-                 const keyFileBuffer = fs.readFileSync(keyFile);
-                 keyFileArrayBuffer = keyFileBuffer.buffer.slice(keyFileBuffer.byteOffset, keyFileBuffer.byteOffset + keyFileBuffer.byteLength);
-            }
+function extractVariables(db: kdbxweb.Kdbx, variableNames: string[]): EnvVarMap {
+    const result: EnvVarMap = {};
+    const varsToFind = new Set(variableNames);
 
-            const credentials = new kdbxweb.Credentials(kdbxweb.ProtectedValue.fromString(password), keyFileArrayBuffer);
-            
-            const db = await kdbxweb.Kdbx.load(arrayBuffer as ArrayBuffer, credentials);
-            
-            const result: EnvVarMap = {};
-            const varsToFind = new Set(variableNames);
+    traverseGroup(db.getDefaultGroup(), varsToFind, result);
+    verifyFoundVariables(variableNames, result);
 
-            // Helper to recursively search groups
-            const traverseGroup = (group: kdbxweb.KdbxGroup) => {
-                for (const entry of group.entries) {
-                    const title = entry.fields.get('Title');
-                    if (!title) continue;
-                    
-                    if (typeof title === 'string' && varsToFind.has(title)) {
-                        const passwordField = entry.fields.get('Password');
-                        let value = '';
-                        
-                        if (passwordField instanceof kdbxweb.ProtectedValue) {
-                            value = passwordField.getText();
-                        } else {
-                            value = String(passwordField || '');
-                        }
+    return result;
+}
 
-                        result[title] = value;
-                    }
-                }
-                
-                for (const subGroup of group.groups) {
-                    traverseGroup(subGroup);
-                }
-            };
+function traverseGroup(group: kdbxweb.KdbxGroup, varsToFind: Set<string>, result: EnvVarMap) {
+    for (const entry of group.entries) {
+        const title = entry.fields.get('Title');
+        if (typeof title === 'string' && varsToFind.has(title)) {
+            result[title] = getValueFromEntry(entry);
+        }
+    }
+    
+    for (const subGroup of group.groups) {
+        traverseGroup(subGroup, varsToFind, result);
+    }
+}
 
-            traverseGroup(db.getDefaultGroup());
+function getValueFromEntry(entry: kdbxweb.KdbxEntry): string {
+    const passwordField = entry.fields.get('Password');
+    
+    if (passwordField instanceof kdbxweb.ProtectedValue) {
+        return passwordField.getText();
+    }
+    
+    return String(passwordField || '');
+}
 
-            // Check if we found everything
-            const foundKeys = Object.keys(result);
-            if (foundKeys.length < variableNames.length) {
-                const missing = variableNames.filter(v => !foundKeys.includes(v));
-                console.warn(`Warning: Could not find the following variables in the KDBX file: ${missing.join(', ')}`);
-            }
+function verifyFoundVariables(requested: string[], found: EnvVarMap) {
+    const foundKeys = Object.keys(found);
+    if (foundKeys.length < requested.length) {
+        const missing = requested.filter(v => !foundKeys.includes(v));
+        console.warn(`Warning: Could not find the following variables in the KDBX file: ${missing.join(', ')}`);
+    }
+}
 
-            return result;
-
-        } catch (error) {
-            if (error instanceof Error) {
-                 // Common error is bad password, which throws generic errors often
-                 if (error.message.includes('HMAC') || error.message.includes('password')) {
-                     throw new Error('Failed to decrypt KDBX file. Check your password or keyfile.');
-                 }
-            }
-            throw error;
+function handleError(error: unknown) {
+    if (error instanceof Error) {
+        // Common error is bad password, which throws generic errors often
+        if (error.message.includes('HMAC') || error.message.includes('password')) {
+            throw new Error('Failed to decrypt KDBX file. Check your password or keyfile.');
         }
     }
 }

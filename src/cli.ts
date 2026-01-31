@@ -4,12 +4,28 @@ import { hideBin } from 'yargs/helpers';
 import spawn from 'cross-spawn';
 import promptSync from 'prompt-sync';
 import * as path from 'path';
-import { KdbxEnvLoader } from './kdbx-loader';
+import { loadKdbxVariables } from './kdbx-loader';
 
 const prompt = promptSync({ sigint: true });
 
 async function main() {
-    const argv = await yargs(hideBin(process.argv))
+    const argv = await parseArgs();
+    
+    validateCommand(argv._);
+
+    const config = getConfiguration(argv);
+    const password = getPassword();
+
+    try {
+        await runCommandWithSecrets(config, password, argv._);
+    } catch (error: any) {
+        console.error('Error:', error.message);
+        process.exit(1);
+    }
+}
+
+async function parseArgs() {
+    return yargs(hideBin(process.argv))
         .option('file', {
             alias: 'f',
             type: 'string',
@@ -31,16 +47,24 @@ async function main() {
         .usage('Usage: $0 --file <path> --vars <VAR1> <VAR2> -- <command>')
         .help()
         .parse();
+}
 
-    const kdbxPath = path.resolve(process.cwd(), argv.file);
-    const variables = argv.vars as string[];
-    const commandArgs = argv._;
-
+function validateCommand(commandArgs: (string | number)[]) {
     if (commandArgs.length === 0) {
         console.error('Error: No command specified to run. Use "-- <command>"');
         process.exit(1);
     }
+}
 
+function getConfiguration(argv: any) {
+    return {
+        kdbxPath: path.resolve(process.cwd(), argv.file),
+        variables: argv.vars as string[],
+        keyFile: argv.keyfile as string | undefined
+    };
+}
+
+function getPassword(): string {
     let password = process.env.KDBX_PASSWORD;
     
     if (!password) {
@@ -51,39 +75,39 @@ async function main() {
         console.error('Password is required.');
         process.exit(1);
     }
+    return password;
+}
 
-    try {
-        const loader = new KdbxEnvLoader(kdbxPath);
-        console.log('Loading variables from KDBX...');
-        const secretEnv = await loader.loadVariables(password, variables, argv.keyfile);
+async function runCommandWithSecrets(config: ReturnType<typeof getConfiguration>, password: string, commandArgs: (string | number)[]) {
+    console.log('Loading variables from KDBX...');
+    const secretEnv = await loadKdbxVariables(config.kdbxPath, password, config.variables, config.keyFile);
 
-        const newEnv = {
-            ...process.env,
-            ...secretEnv
-        };
+    const newEnv = {
+        ...process.env,
+        ...secretEnv
+    };
 
-        const command = commandArgs[0] as string;
-        const args = commandArgs.slice(1) as string[];
+    const command = String(commandArgs[0]);
+    const args = commandArgs.slice(1).map(String);
 
-        console.log(`Running: ${command} ${args.join(' ')}`);
+    console.log(`Running: ${command} ${args.join(' ')}`);
 
-        const child = spawn(command, args, {
-            env: newEnv,
-            stdio: 'inherit'
-        });
+    spawnProcess(command, args, newEnv);
+}
 
-        child.on('close', (code) => {
-            process.exit(code || 0);
-        });
+function spawnProcess(command: string, args: string[], env: NodeJS.ProcessEnv) {
+    const child = spawn(command, args, {
+        env: env,
+        stdio: 'inherit'
+    });
 
-        child.on('error', (err) => {
-            console.error('Failed to start subprocess:', err);
-        });
+    child.on('close', (code) => {
+        process.exit(code || 0);
+    });
 
-    } catch (error: any) {
-        console.error('Error:', error.message);
-        process.exit(1);
-    }
+    child.on('error', (err) => {
+        console.error('Failed to start subprocess:', err);
+    });
 }
 
 main();
