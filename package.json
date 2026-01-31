@@ -1,0 +1,36 @@
+{
+  "name": "kdbx-env-loader",
+  "version": "1.0.0",
+  "description": "Load environment variables from a KDBX file and run a command",
+  "main": "dist/index.js",
+  "bin": {
+    "kdbx-env": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js"
+  },
+  "keywords": [
+    "kdbx",
+    "keepass",
+    "env",
+    "environment",
+    "variables",
+    "loader"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cross-spawn": "^7.0.6",
+    "kdbxweb": "^2.1.1",
+    "prompt-sync": "^4.2.0",
+    "yargs": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^25.1.0",
+    "@types/prompt-sync": "^4.2.3",
+    "@types/yargs": "^17.0.35",
+    "typescript": "^5.9.3"
+  }
+}
